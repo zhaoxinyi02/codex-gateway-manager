@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _codex_processes():
     try:
@@ -12,7 +14,7 @@ def _codex_processes():
         )
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", ps],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, timeout=8, creationflags=NO_WINDOW,
         )
         if r.returncode != 0 or not r.stdout.strip():
             return []
@@ -67,7 +69,7 @@ def start():
         except Exception:
             continue
     try:
-        subprocess.Popen(["explorer.exe", "shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"])
+        subprocess.Popen(["explorer.exe", "shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"], creationflags=NO_WINDOW)
         for _ in range(20):
             time.sleep(0.5)
             if is_running():
@@ -80,7 +82,7 @@ def start():
 def stop():
     for proc in _codex_processes():
         try:
-            subprocess.run(["taskkill", "/pid", str(proc["pid"]), "/f"], capture_output=True, timeout=8)
+            subprocess.run(["taskkill", "/pid", str(proc["pid"]), "/f"], capture_output=True, timeout=8, creationflags=NO_WINDOW)
         except Exception:
             pass
     time.sleep(1)

@@ -2,11 +2,13 @@ import os, subprocess, time, json, urllib.request, urllib.error
 from constants import *
 import runtime
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 def is_running():
     try:
         r = subprocess.run(
             ["tasklist", "/fi", "imagename eq cli-proxy-api.exe", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=5, creationflags=NO_WINDOW)
         return "cli-proxy-api.exe" in r.stdout.lower()
     except Exception:
         return False
@@ -15,7 +17,7 @@ def get_pid():
     try:
         r = subprocess.run(
             ["tasklist", "/fi", "imagename eq cli-proxy-api.exe", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=5, creationflags=NO_WINDOW)
         for line in r.stdout.strip().splitlines():
             parts = [p.strip('"') for p in line.split('","')]
             if parts and parts[0].lower() == "cli-proxy-api.exe":
@@ -103,6 +105,7 @@ def start():
         return True
     if not os.path.exists(EXE_PATH):
         return False
+    runtime.update_cli_proxy_runtime_if_possible()
     _write_vbs()
     subprocess.Popen(
         ["wscript.exe", VBS_PATH],
@@ -118,7 +121,7 @@ def stop():
     if pid:
         try:
             subprocess.run(["taskkill", "/pid", str(pid), "/f"],
-                           capture_output=True, timeout=10)
+                           capture_output=True, timeout=10, creationflags=NO_WINDOW)
         except Exception:
             pass
     time.sleep(1)
@@ -134,7 +137,7 @@ def get_scheduled_task_state():
         try:
             r = subprocess.run(
                 ["schtasks", "/query", "/tn", task_name, "/fo", "list"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, timeout=5, creationflags=NO_WINDOW)
             if r.returncode != 0:
                 continue
             if "Ready" in r.stdout:
@@ -153,14 +156,14 @@ def enable_autostart():
     _write_vbs()
     # Delete old task first
     for task_name in (AUTOSTART_TASK_NAME, OLD_AUTOSTART_TASK_NAME):
-        subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True)
+        subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, creationflags=NO_WINDOW)
     # Create new task with wscript + VBS (hidden window)
     cmd = (
         f'schtasks /create /tn "{AUTOSTART_TASK_NAME}" '
         f'/tr "wscript.exe \"{VBS_PATH}\"" '
         f'/sc onlogon /rl limited /f'
     )
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
     return r.returncode == 0
 
 def disable_autostart():
@@ -168,7 +171,7 @@ def disable_autostart():
     for task_name in (AUTOSTART_TASK_NAME, OLD_AUTOSTART_TASK_NAME):
         r = subprocess.run(
             ["schtasks", "/delete", "/tn", task_name, "/f"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, creationflags=NO_WINDOW)
         ok = ok or r.returncode == 0
     return ok
 

@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import time
 
 from constants import *
 
@@ -34,8 +35,38 @@ def ensure_cli_proxy_runtime():
             except OSError:
                 should_copy = True
         if should_copy:
-            shutil.copy2(bundled, EXE_PATH)
+            try:
+                shutil.copy2(bundled, EXE_PATH)
+            except PermissionError:
+                if os.path.exists(EXE_PATH):
+                    return True, "现有 CLIProxyAPI 正在运行，已沿用当前运行时。"
+                return False, "CLIProxyAPI 正在被占用，且本地运行时不存在。"
     return os.path.exists(EXE_PATH), EXE_PATH
+
+
+def update_cli_proxy_runtime_if_possible():
+    bundled = _bundled_cli_proxy_path()
+    if not bundled:
+        return False, "未找到内置 cli-proxy-api.exe。"
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    if os.path.abspath(bundled).lower() == os.path.abspath(EXE_PATH).lower():
+        return True, "已使用本地运行时。"
+    tmp = EXE_PATH + ".new"
+    try:
+        shutil.copy2(bundled, tmp)
+        for _ in range(10):
+            try:
+                os.replace(tmp, EXE_PATH)
+                return True, "CLIProxyAPI 运行时已更新。"
+            except PermissionError:
+                time.sleep(0.3)
+        return False, "CLIProxyAPI 仍被占用，暂未更新运行时。"
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def ensure_all():
