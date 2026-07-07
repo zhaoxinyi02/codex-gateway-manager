@@ -56,26 +56,53 @@ def _candidate_paths():
             yield path
 
 
+def _app_ids():
+    ids = ["OpenAI.Codex_2p2nqsd0c76g0!App"]
+    try:
+        ps = "Get-StartApps | Where-Object { $_.Name -eq 'Codex' -or $_.Name -like '*Codex*' } | Select-Object -ExpandProperty AppID"
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=8, creationflags=NO_WINDOW,
+        )
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if line and line not in ids:
+                ids.insert(0, line)
+    except Exception:
+        pass
+    return ids
+
+
 def start():
     if is_running():
         return True
+    for app_id in _app_ids():
+        uri = "shell:AppsFolder\\" + app_id
+        try:
+            os.startfile(uri)
+            for _ in range(50):
+                time.sleep(0.3)
+                if is_running():
+                    return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["explorer.exe", uri], creationflags=NO_WINDOW)
+            for _ in range(50):
+                time.sleep(0.3)
+                if is_running():
+                    return True
+        except Exception:
+            pass
     for path in _candidate_paths():
         try:
             subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
-            for _ in range(20):
-                time.sleep(0.5)
+            for _ in range(50):
+                time.sleep(0.3)
                 if is_running():
                     return True
         except Exception:
             continue
-    try:
-        subprocess.Popen(["explorer.exe", "shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"], creationflags=NO_WINDOW)
-        for _ in range(20):
-            time.sleep(0.5)
-            if is_running():
-                return True
-    except Exception:
-        pass
     return False
 
 

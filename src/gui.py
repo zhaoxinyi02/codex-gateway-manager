@@ -5,12 +5,12 @@ import threading
 import urllib.request
 import webbrowser
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QPlainTextEdit, QStackedWidget, QSystemTrayIcon, QTableWidget,
+    QProgressDialog, QPushButton, QPlainTextEdit, QStackedWidget, QSystemTrayIcon, QTableWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QListWidget,
     QListWidgetItem, QInputDialog
 )
@@ -48,8 +48,10 @@ QWidget#Card { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 14
 QWidget#HeroCard { background: #0f172a; border-radius: 18px; }
 QLabel#HeroTitle { color: white; font-size: 24px; font-weight: 800; }
 QLabel#HeroText { color: #cbd5e1; font-size: 14px; }
-QPushButton { background: #111827; color: #ffffff; border: 0; border-radius: 9px; padding: 9px 16px; font-weight: 600; }
+QPushButton { background: #111827; color: #ffffff; border: 0; border-radius: 9px; padding: 9px 16px; font-weight: 600; outline: none; }
 QPushButton:hover { background: #1f2937; }
+QPushButton:focus { outline: none; border: 0; }
+QPushButton:pressed { background: #0b1220; padding-top: 10px; padding-bottom: 8px; }
 QPushButton:disabled { background: #d8e0ea; color: #7b8794; }
 QPushButton#Secondary { background: #e8eef6; color: #172033; }
 QPushButton#Secondary:hover { background: #dbe4ef; }
@@ -58,12 +60,20 @@ QPushButton#Danger:hover { background: #b91c1c; }
 QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {
   background: #ffffff; border: 1px solid #d6dee8; border-radius: 9px; padding: 8px;
 }
-QTableWidget { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 12px; gridline-color: #eef2f7; selection-background-color: #dbeafe; selection-color: #0f172a; }
+QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {
+  border: 1px solid #60a5fa;
+}
+QTableWidget { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 12px; gridline-color: #eef2f7; selection-background-color: #dbeafe; selection-color: #0f172a; outline: none; }
+QTableWidget:focus { outline: none; border: 1px solid #cbd5e1; }
+QTableWidget::item:focus { outline: none; border: 0; }
 QHeaderView::section { background: #f8fafc; color: #334155; padding: 9px; border: 0; border-bottom: 1px solid #e2e8f0; font-weight: 700; }
-QListWidget { background: #0b1220; color: #cbd5e1; border: 0; padding: 14px; font-size: 14px; }
+QListWidget { background: #0b1220; color: #cbd5e1; border: 0; padding: 14px; font-size: 14px; outline: none; }
 QListWidget::item { padding: 13px 16px; border-radius: 10px; margin: 3px 0; outline: none; border: 0; }
 QListWidget::item:selected { background: #2563eb; color: white; }
 QListWidget::item:focus { outline: none; border: 0; }
+QProgressDialog { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 12px; }
+QProgressBar { border: 1px solid #d6dee8; border-radius: 7px; background: #eef2f7; text-align: center; min-height: 14px; }
+QProgressBar::chunk { background: #2563eb; border-radius: 7px; }
 """
 
 
@@ -111,6 +121,10 @@ class Metric(QWidget):
         layout.addWidget(caption)
 
 
+class TaskSignals(QObject):
+    finished = Signal(object, object)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -118,7 +132,10 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(1120, 720)
         self._allow_exit = False
+        self._task_signals = []
+        self._busy_dialog = None
         self._build_ui()
+        self._remove_focus_frames()
         self._build_tray()
         self.refresh_all()
         self.timer = QTimer(self)
@@ -180,9 +197,9 @@ class MainWindow(QMainWindow):
         self.gateway_restart_btn = QPushButton("重启网关")
         self.gateway_stop_btn.setObjectName("Secondary")
         self.gateway_restart_btn.setObjectName("Secondary")
-        self.gateway_start_btn.clicked.connect(lambda: self._bg(self._start_gateway))
-        self.gateway_stop_btn.clicked.connect(lambda: self._bg(self._stop_gateway))
-        self.gateway_restart_btn.clicked.connect(lambda: self._bg(self._restart_gateway))
+        self.gateway_start_btn.clicked.connect(lambda: self._run_task("正在启动网关", self._start_gateway, self._gateway_done))
+        self.gateway_stop_btn.clicked.connect(lambda: self._run_task("正在停止网关", self._stop_gateway, self._gateway_done))
+        self.gateway_restart_btn.clicked.connect(lambda: self._run_task("正在重启网关", self._restart_gateway, self._gateway_done))
         for b in (self.gateway_start_btn, self.gateway_stop_btn, self.gateway_restart_btn):
             btns.addWidget(b)
         self.gateway_card.layout.addLayout(btns)
@@ -197,8 +214,8 @@ class MainWindow(QMainWindow):
         self.codex_toggle_btn = QPushButton("打开 Codex")
         self.codex_restart_btn = QPushButton("重启 Codex")
         self.codex_restart_btn.setObjectName("Secondary")
-        self.codex_toggle_btn.clicked.connect(lambda: self._bg(self._toggle_codex))
-        self.codex_restart_btn.clicked.connect(lambda: self._bg(self._restart_codex))
+        self.codex_toggle_btn.clicked.connect(lambda: self._run_task("正在处理 Codex", self._toggle_codex, self._codex_done))
+        self.codex_restart_btn.clicked.connect(lambda: self._run_task("正在重启 Codex", self._restart_codex, self._codex_done))
         codex_btns.addWidget(self.codex_toggle_btn)
         codex_btns.addWidget(self.codex_restart_btn)
         self.codex_card.layout.addLayout(codex_btns)
@@ -315,11 +332,18 @@ class MainWindow(QMainWindow):
         self.version_label = QLabel(APP_VERSION + "  ·  zhaoxinyi02/codex-gateway-manager")
         about.layout.addWidget(self.version_label)
         up = QPushButton("检查更新")
-        up.clicked.connect(lambda: self._bg(self._check_update))
+        up.clicked.connect(lambda: self._run_task("正在检查更新", self._check_update, self._update_done))
         about.layout.addWidget(up)
         layout.addWidget(about)
         layout.addStretch(1)
         return page
+
+    def _remove_focus_frames(self):
+        for button in self.findChildren(QPushButton):
+            button.setFocusPolicy(Qt.NoFocus)
+        for table in self.findChildren(QTableWidget):
+            table.setFocusPolicy(Qt.NoFocus)
+        self.nav.setFocusPolicy(Qt.NoFocus)
 
     def _build_tray(self):
         self.tray = QSystemTrayIcon(app_icon(), self)
@@ -332,7 +356,7 @@ class MainWindow(QMainWindow):
         show = QAction("显示窗口", self)
         show.triggered.connect(self.show_window)
         start = QAction("启动/重启网关", self)
-        start.triggered.connect(lambda: self._bg(self._restart_gateway))
+        start.triggered.connect(lambda: self._run_task("正在重启网关", self._restart_gateway, self._gateway_done))
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.exit_app)
         menu.addAction(show)
@@ -454,24 +478,20 @@ class MainWindow(QMainWindow):
         return getattr(self, "_entry_by_row", {}).get(row)
 
     def _after_config_change(self, name):
-        try:
-            config_manager.ensure_builtin_model()
-            gateway.restart()
-            if gateway.is_responding():
-                restore_manager.create_restore_point("auto", name, "配置修改后自动保存")
-        finally:
-            self.refresh_all()
+        config_manager.ensure_builtin_model()
+        ok = gateway.restart()
+        if gateway.is_responding():
+            restore_manager.create_restore_point("auto", name, "配置修改后自动保存")
+        return ok
 
     def _add_model(self):
         dlg = ModelDialog(self)
         if dlg.exec() == QDialog.Accepted:
             r = dlg.result
-            try:
+            def work():
                 config_manager.add_model(**r)
-                self._after_config_change("add-model")
-                self._info("模型已添加。")
-            except Exception as ex:
-                self._error(str(ex))
+                return self._after_config_change("add-model")
+            self._run_task("正在添加模型并重启网关", work, lambda ok: self._config_done(ok, "模型已添加。"))
 
     def _modify_model(self):
         e = self.selected_entry()
@@ -483,12 +503,10 @@ class MainWindow(QMainWindow):
             return
         dlg = ModelDialog(self, e)
         if dlg.exec() == QDialog.Accepted:
-            try:
+            def work():
                 config_manager.modify_model(e["number"], **dlg.result)
-                self._after_config_change("modify-model")
-                self._info("模型已修改。")
-            except Exception as ex:
-                self._error(str(ex))
+                return self._after_config_change("modify-model")
+            self._run_task("正在修改模型并重启网关", work, lambda ok: self._config_done(ok, "模型已修改。"))
 
     def _remove_model(self):
         e = self.selected_entry()
@@ -499,12 +517,10 @@ class MainWindow(QMainWindow):
             self._warn("内置免费模型不可删除。")
             return
         if QMessageBox.question(self, "确认删除", "确认删除 {} ?".format(e["display_name"])) == QMessageBox.Yes:
-            try:
+            def work():
                 config_manager.remove_model(e["number"])
-                self._after_config_change("remove-model")
-                self._info("模型已删除。")
-            except Exception as ex:
-                self._error(str(ex))
+                return self._after_config_change("remove-model")
+            self._run_task("正在删除模型并重启网关", work, lambda ok: self._config_done(ok, "模型已删除。"))
 
     def _view_config(self):
         dlg = TextDialog("脱敏后的 config.yaml", config_manager.get_redacted_config(), self)
@@ -525,33 +541,28 @@ class MainWindow(QMainWindow):
             self._warn("请先选择一个回退点。")
             return
         if QMessageBox.question(self, "确认回退", "回退会覆盖当前 Codex/网关配置，继续?") == QMessageBox.Yes:
-            try:
+            def work():
                 restore_manager.restore(p["id"])
-                gateway.restart()
-                self.refresh_all()
-                self._info("已恢复回退点。")
-            except Exception as ex:
-                self._error(str(ex))
+                return gateway.restart()
+            self._run_task("正在恢复回退点并重启网关", work, lambda ok: self._config_done(ok, "已恢复回退点。"))
 
     def _repair_codex(self, requires_auth):
-        restore_manager.create_restore_point("auto", "before-codex-mode-switch", "切换登录模式前自动保存")
-        ok, msg = codex_repair.repair_codex_config(requires_auth)
-        if ok:
-            restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
-            self._info(msg)
-        else:
-            self._error(msg)
-        self.refresh_all()
+        def work():
+            restore_manager.create_restore_point("auto", "before-codex-mode-switch", "切换登录模式前自动保存")
+            ok, msg = codex_repair.repair_codex_config(requires_auth)
+            if ok:
+                restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
+            return ok, msg
+        self._run_task("正在切换 Codex 登录模式", work, self._mode_switch_done)
 
     def _switch_official_only(self):
-        restore_manager.create_restore_point("auto", "before-official-only", "切换纯官方订阅前自动保存")
-        ok, msg = codex_repair.switch_to_official_only()
-        if ok:
-            restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
-            self._info(msg)
-        else:
-            self._error(msg)
-        self.refresh_all()
+        def work():
+            restore_manager.create_restore_point("auto", "before-official-only", "切换纯官方订阅前自动保存")
+            ok, msg = codex_repair.switch_to_official_only()
+            if ok:
+                restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
+            return ok, msg
+        self._run_task("正在切换为纯官方订阅", work, self._mode_switch_done)
 
     def _codex_login(self):
         if gateway.run_codex_login():
@@ -560,27 +571,19 @@ class MainWindow(QMainWindow):
             self._error("无法启动登录流程。")
 
     def _start_gateway(self):
-        ok = gateway.start()
-        self.tray.showMessage(APP_NAME, "网关已启动" if ok else "网关启动失败")
-        self.refresh_all()
+        return gateway.start()
 
     def _stop_gateway(self):
-        gateway.stop()
-        self.refresh_all()
+        return gateway.stop()
 
     def _restart_gateway(self):
-        ok = gateway.restart()
-        self.tray.showMessage(APP_NAME, "网关已重启" if ok else "网关重启失败")
-        self.refresh_all()
+        return gateway.restart()
 
     def _toggle_codex(self):
-        ok = codex_control.stop() if codex_control.is_running() else codex_control.start()
-        self.tray.showMessage(APP_NAME, "Codex 操作完成" if ok else "Codex 操作失败")
-        self.refresh_status()
+        return codex_control.stop() if codex_control.is_running() else codex_control.start()
 
     def _restart_codex(self):
-        codex_control.restart()
-        self.refresh_status()
+        return codex_control.restart()
 
     def _apply_port(self):
         try:
@@ -592,7 +595,7 @@ class MainWindow(QMainWindow):
             return
         restore_manager.create_restore_point("auto", "before-port-change", "修改端口前自动保存")
         config_manager.set_port(port)
-        self._restart_gateway()
+        self._run_task("正在应用端口并重启网关", self._restart_gateway, self._gateway_done)
 
     def _enable_autostart(self):
         self._info("已开启自启。" if gateway.enable_autostart() else "开启自启失败。")
@@ -603,23 +606,108 @@ class MainWindow(QMainWindow):
         self.refresh_settings()
 
     def _check_update(self):
-        r = check_update()
-        if r.get("has_update"):
-            if QMessageBox.question(self, "发现更新", "发现新版本 {}，打开下载页?".format(r["latest_version"])) == QMessageBox.Yes:
-                webbrowser.open(r.get("download_url") or r.get("release_url"))
-        elif r.get("error"):
-            self._error("检查失败: " + r["error"])
+        return check_update()
+
+    def _run_task(self, title, fn, on_done=None):
+        if self._busy_dialog is not None:
+            self._warn("已有任务正在执行，请稍等一下。")
+            return
+
+        dialog = QProgressDialog(title + "…", None, 0, 0, self)
+        dialog.setWindowTitle(APP_NAME)
+        dialog.setCancelButton(None)
+        dialog.setMinimumDuration(0)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
+        dialog.show()
+        self._busy_dialog = dialog
+        central = self.centralWidget()
+        if central:
+            central.setEnabled(False)
+
+        signals = TaskSignals()
+        self._task_signals.append(signals)
+
+        def finish(result, error):
+            try:
+                if self._busy_dialog is dialog:
+                    self._busy_dialog = None
+                dialog.close()
+                if central:
+                    central.setEnabled(True)
+                try:
+                    self.refresh_status()
+                except Exception:
+                    pass
+                if error is not None:
+                    self._error(str(error))
+                    return
+                if on_done:
+                    on_done(result)
+            finally:
+                if signals in self._task_signals:
+                    self._task_signals.remove(signals)
+
+        signals.finished.connect(finish)
+
+        def worker():
+            try:
+                result = fn()
+                signals.finished.emit(result, None)
+            except Exception as ex:
+                signals.finished.emit(None, ex)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _gateway_done(self, ok):
+        self.refresh_all()
+        if ok:
+            self.tray.showMessage(APP_NAME, "网关操作完成。")
         else:
-            self._info("当前已是最新版本。")
+            self._error("网关操作失败，请检查端口是否被占用，或查看配置是否有效。")
 
-    def _bg(self, fn):
-        threading.Thread(target=lambda: self._safe_call(fn), daemon=True).start()
+    def _codex_done(self, ok):
+        self.refresh_all()
+        if not ok:
+            self._error("Codex 操作失败：没有成功启动/停止 Codex。请确认 Codex Desktop 已安装。")
 
-    def _safe_call(self, fn):
-        try:
-            fn()
-        except Exception as ex:
-            QTimer.singleShot(0, lambda: self._error(str(ex)))
+    def _config_done(self, ok, message):
+        self.refresh_all()
+        if ok:
+            self._info(message)
+        else:
+            self._error("操作已执行，但网关未正常响应。配置已保留，请检查端口、API 地址或模型配置。")
+
+    def _mode_switch_done(self, result):
+        self.refresh_all()
+        ok, msg = result
+        if ok:
+            self._info(msg)
+        else:
+            self._error(msg)
+
+    def _update_done(self, result):
+        if result.get("error"):
+            msg = (
+                "检查更新失败，但程序不会再卡死。\n\n"
+                "原因：{error}\n\n"
+                "你也可以手动打开 Release 页面查看：\n{url}"
+            ).format(error=result.get("error"), url=result.get("release_url", ""))
+            self._warn(msg)
+            return
+        if result.get("has_update"):
+            latest = result.get("latest_version") or "新版"
+            current = result.get("current_version") or APP_VERSION
+            if QMessageBox.question(
+                self,
+                "发现新版本",
+                "当前版本：{current}\n最新版本：{latest}\n\n是否打开下载页面？".format(current=current, latest=latest),
+            ) == QMessageBox.Yes:
+                webbrowser.open(result.get("download_url") or result.get("release_url"))
+        else:
+            self._info("当前已是最新版本：{}".format(result.get("current_version") or APP_VERSION))
 
     def _info(self, text):
         QMessageBox.information(self, APP_NAME, text)
