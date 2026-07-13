@@ -118,6 +118,64 @@ def save_catalog(cat):
     with open(CATALOG_PATH, "w", encoding="utf-8", newline="\n") as f:
         json.dump(cat, f, ensure_ascii=False, separators=(",", ":"))
 
+
+def ensure_catalog_display_names():
+    """Keep both known display-name fields in sync for Codex catalog readers."""
+    cat = load_catalog()
+    changed = False
+    for model in _models_list(cat):
+        if not isinstance(model, dict):
+            continue
+        display = str(model.get("display_name") or "").strip()
+        if display and model.get("name") != display:
+            model["name"] = display
+            changed = True
+    if changed:
+        save_catalog(cat)
+    return changed
+
+
+def expose_display_names_to_codex():
+    """Use configured display names as client-facing IDs.
+
+    CLIProxyAPI currently publishes the upstream name as ``display_name`` for
+    API-key models.  The new Codex desktop prefers that field, so distinct
+    providers with the same upstream ID collapse visually.  Making the
+    client-facing alias equal to our configured display name fixes both the
+    label and the collision while the upstream ``name`` remains unchanged.
+    """
+    cfg = load_config()
+    cat = load_catalog()
+    models = _models_list(cat)
+    by_slug = {str(m.get("slug")): m for m in models if isinstance(m, dict)}
+    used = set()
+    changes = []
+    for item in collect_entries(cfg):
+        old = item["alias"]
+        catalog_model = by_slug.get(old)
+        if not catalog_model:
+            continue
+        desired = str(catalog_model.get("display_name") or old).strip() or old
+        base = desired
+        n = 2
+        while desired.casefold() in used:
+            desired = "{} ({})".format(base, n)
+            n += 1
+        used.add(desired.casefold())
+        if desired == old:
+            continue
+        entry = cfg[item["section"]][item["entry_index"]]
+        entry["models"][item["model_index"]]["alias"] = desired
+        catalog_model["slug"] = desired
+        catalog_model["x_legacy_alias"] = old
+        set_max_output(cfg, desired, get_max_output(cfg, old))
+        set_max_output(cfg, old, None)
+        changes.append((old, desired))
+    if changes:
+        save_config(cfg)
+        save_catalog(cat)
+    return changes
+
 def _merge_list_unique(target, source, key_fn):
     existing = {key_fn(x) for x in target if isinstance(x, dict)}
     changed = False
@@ -203,6 +261,7 @@ def get_catalog_model(catalog, alias):
 def get_summary():
     ensure_base_files()
     ensure_builtin_model()
+    ensure_catalog_display_names()
     cfg = load_config()
     cat = load_catalog()
     entries = collect_entries(cfg)
@@ -324,6 +383,7 @@ def add_model(api_type, provider_name, base_url, api_key,
     new_model = copy.deepcopy(template)
     new_model["slug"] = alias
     new_model["display_name"] = display_name
+    new_model["name"] = display_name
     new_model["description"] = provider_name
     new_model["visibility"] = "list"
     new_model["supported_in_api"] = True
@@ -399,6 +459,7 @@ def modify_model(number, base_url=None, api_key=None, upstream=None,
     cat_model["slug"] = new_alias
     if display_name:
         cat_model["display_name"] = display_name
+        cat_model["name"] = display_name
     if provider_name:
         cat_model["description"] = provider_name
     cat_model["visibility"] = "list"
@@ -518,6 +579,7 @@ def ensure_builtin_model():
     cat_model.update({
         "slug": BUILTIN_ALIAS,
         "display_name": BUILTIN_DISPLAY_NAME,
+        "name": BUILTIN_DISPLAY_NAME,
         "description": BUILTIN_PROVIDER_NAME,
         "visibility": "list",
         "supported_in_api": True,

@@ -1,6 +1,6 @@
-# Codex Gateway Manager
+# ModelDock
 
-Codex Gateway Manager 是一个 Windows 单文件桌面工具，用来把 Codex Desktop、ChatGPT 订阅模型和第三方 API 模型放到同一个模型下拉列表里统一使用。
+ModelDock（模型停靠站）是一个 Windows 单文件桌面工具，用来把 Codex Desktop、ChatGPT 订阅模型和第三方 API 模型放到同一个模型下拉列表里统一使用。
 
 它内置并托管 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，用户不需要单独下载网关程序。第一次启动时，软件会自动初始化本地网关、配置目录、模型目录和内置免费模型。
 
@@ -23,16 +23,16 @@ Codex Gateway Manager 是一个 Windows 单文件桌面工具，用来把 Codex 
 
 ## 下载
 
-前往 [Releases](https://github.com/zhaoxinyi02/codex-gateway-manager/releases) 下载最新版：
+前往 [Releases](https://github.com/zhaoxinyi02/modeldock/releases) 下载最新版：
 
-`CodexGatewayManager_VYYYY.MM.DD.exe`
+`ModelDock_VYYYY.MM.DD.exe`
 
 如果同一天发布多个版本，会使用 `VYYYY.MM.DDa`、`VYYYY.MM.DDb` 这样的后缀。
 
 ## 使用
 
 1. 安装或下载 Codex Desktop。
-2. 打开 `CodexGatewayManager.exe`。
+2. 打开 `ModelDock.exe`。
 3. 在首页启动本地网关，必要时点击“打开 Codex”。
 4. 在设置页选择一种模式：
    - “官方登录”：使用 CLIProxyAPI 启动 Codex 官方 OAuth 登录。

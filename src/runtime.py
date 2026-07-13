@@ -73,7 +73,8 @@ def ensure_all():
     ok, msg = ensure_cli_proxy_runtime()
     if not ok:
         return False, msg
-    from config_manager import ensure_base_files, ensure_builtin_model
+    from config_manager import ensure_base_files, ensure_builtin_model, expose_display_names_to_codex
     ensure_base_files()
     ensure_builtin_model()
+    expose_display_names_to_codex()
     return True, "运行时已就绪。"

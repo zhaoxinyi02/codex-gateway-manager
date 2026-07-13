@@ -1,6 +1,47 @@
 import os, re, datetime
 from constants import *
 
+
+def _desktop_catalog_line():
+    return 'model_catalog_json = "' + CATALOG_PATH.replace("\\", "\\\\") + '"\n'
+
+
+def _ensure_model_catalog(content):
+    content = _remove_model_catalog(content)
+    catalog_line = _desktop_catalog_line()
+    desktop = re.search(r'(?m)^\[desktop\]\s*\n', content)
+    if desktop:
+        return content[:desktop.end()] + catalog_line + content[desktop.end():]
+    return content.rstrip() + "\n\n[desktop]\n" + catalog_line
+
+
+def _remove_model_catalog(content):
+    return re.sub(r'(?m)^\s*model_catalog_json\s*=.*\n?', "", content)
+
+
+def _set_top_level_string(content, key, value):
+    line = key + ' = "' + value + '"\n'
+    pattern = r'(?m)^\s*' + re.escape(key) + r'\s*=\s*"[^"]*"\s*\n?'
+    if re.search(pattern, content):
+        return re.sub(pattern, line, content, count=1)
+    return line + content
+
+
+def _set_top_level_bool(content, key, value):
+    line = key + " = " + ("true" if value else "false") + "\n"
+    pattern = r'(?m)^\s*' + re.escape(key) + r'\s*=\s*(?:true|false)\s*\n?'
+    if re.search(pattern, content):
+        return re.sub(pattern, line, content, count=1)
+    return line + content
+
+
+def _replace_provider_block(content, provider_block):
+    pattern = r'(?ms)^\[model_providers\.cliproxyapi\]\s*\n.*?(?=^\[[^\]]+\]|\Z)'
+    if re.search(pattern, content):
+        return re.sub(pattern, provider_block.rstrip() + "\n\n", content, count=1)
+    return content.rstrip() + "\n\n" + provider_block.rstrip() + "\n"
+
+
 def check_codex_config():
     issues = []
     if not os.path.exists(CODEX_CONFIG):
@@ -61,19 +102,10 @@ def repair_codex_config(requires_openai_auth=True):
         'requires_openai_auth = ' + ("true" if requires_openai_auth else "false") + '\n'
     )
 
-    if "[model_providers.cliproxyapi]" not in old:
-        old = old.rstrip() + "\n" + provider_block
-    else:
-        old = re.sub(
-            r'\[model_providers\.cliproxyapi\][^\[]*?(?=\n\[|\nmodel|\Z)',
-            provider_block.strip(),
-            old, flags=re.DOTALL
-        )
-
-    if re.search(r'model_provider\s*=\s*"', old):
-        old = re.sub(r'model_provider\s*=\s*"[^"]*"', 'model_provider = "cliproxyapi"', old)
-    else:
-        old = 'model_provider = "cliproxyapi"\n' + old
+    old = _replace_provider_block(old, provider_block)
+    old = _set_top_level_string(old, "model_provider", "cliproxyapi")
+    old = _set_top_level_bool(old, "supports_websockets", True)
+    old = _ensure_model_catalog(old)
 
     with open(CODEX_CONFIG, 'w', encoding='utf-8') as f:
         f.write(old)
@@ -92,10 +124,10 @@ def switch_to_official_only():
         old = ""
     with open(backup, "w", encoding="utf-8") as f:
         f.write(old)
-    # Codex Desktop falls back to its official ChatGPT provider when no top-level
-    # custom model_provider is selected. Keep the provider block as a dormant
-    # reusable config; only remove the active selection line.
+    # Do not touch auth.json, global state, sessions, or archived sessions.
+    # The official client falls back when no active custom provider is selected.
     new = re.sub(r'(?m)^\s*model_provider\s*=\s*"cliproxyapi"\s*\n?', "", old)
+    new = _remove_model_catalog(new)
     with open(CODEX_CONFIG, "w", encoding="utf-8") as f:
         f.write(new)
     return True, "已切换为纯官方订阅。备份已保存到 " + backup

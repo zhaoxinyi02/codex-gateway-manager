@@ -55,12 +55,12 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME:-manual}"
-          cp dist/CodexGatewayManager.exe "dist/CodexGatewayManager_${VERSION}.exe"
+          cp dist/ModelDock.exe "dist/ModelDock_${VERSION}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CodexGatewayManager
+          name: ModelDock
           path: dist/*.exe
 
       - name: Create Release

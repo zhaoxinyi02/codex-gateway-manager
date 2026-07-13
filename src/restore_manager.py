@@ -13,6 +13,14 @@ TRACKED_FILES = [
     ("codex-auth", os.path.join(CODEX_HOME, "auth.json")),
 ]
 
+# Chat history and the ChatGPT desktop global state are intentionally excluded.
+# Mode changes must never move, remove, or restore conversation files.
+EXCLUDED_CODEX_DATA = [
+    os.path.join(CODEX_HOME, "sessions"),
+    os.path.join(CODEX_HOME, "archived_sessions"),
+    os.path.join(CODEX_HOME, ".codex-global-state.json"),
+]
+
 
 def _safe_name(text):
     text = (text or "").strip() or "restore"
@@ -53,9 +61,15 @@ def create_restore_point(kind="auto", name=None, notes=""):
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "app_version": APP_VERSION,
         "items": copied,
+        "excluded": EXCLUDED_CODEX_DATA,
     }
     with open(os.path.join(root, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+    try:
+        import conversation_guard
+        conversation_guard.snapshot("restore-point-" + safe)
+    except Exception:
+        pass
     return root
 
 

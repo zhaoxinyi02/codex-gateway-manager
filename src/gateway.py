@@ -127,6 +127,61 @@ def is_responding():
     except Exception:
         return False
 
+
+def _configured_codex_model():
+    try:
+        if not os.path.exists(CODEX_CONFIG):
+            return ""
+        text = open(CODEX_CONFIG, encoding="utf-8").read()
+        import re
+        match = re.search(r'(?m)^\s*model\s*=\s*"([^"]+)"', text)
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def probe_official_subscription():
+    """Verify the local gateway can make one minimal official Codex request."""
+    if not is_responding():
+        return False, "网关未响应。"
+    candidates = [_configured_codex_model(), "gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark"]
+    seen = set()
+    last_error = ""
+    for model in candidates:
+        model = (model or "").strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        body = json.dumps({
+            "model": model,
+            "input": "Reply with exactly: ok",
+            "max_output_tokens": 16,
+            "store": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            get_gateway_url() + "/v1/responses",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + get_gateway_key(),
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            response = json.loads(urllib.request.urlopen(req, timeout=45).read().decode("utf-8"))
+            if response.get("id") or response.get("output"):
+                return True, "官方订阅凭据预检成功（" + model + "）。"
+            last_error = "官方模型未返回有效响应。"
+        except urllib.error.HTTPError as ex:
+            try:
+                detail = ex.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                detail = ""
+            last_error = "HTTP {} {}".format(ex.code, detail)
+        except Exception as ex:
+            last_error = str(ex)
+    return False, "官方订阅凭据预检失败：" + (last_error or "未找到可用官方模型。")
+
 def get_status():
     runtime.ensure_all()
     running = is_running()
@@ -212,7 +267,7 @@ def restart():
     return start()
 
 def get_scheduled_task_state():
-    for task_name in (AUTOSTART_TASK_NAME, OLD_AUTOSTART_TASK_NAME):
+    for task_name in (AUTOSTART_TASK_NAME, *LEGACY_AUTOSTART_TASK_NAMES):
         try:
             r = subprocess.run(
                 ["schtasks", "/query", "/tn", task_name, "/fo", "list"],
@@ -234,7 +289,7 @@ def enable_autostart():
     runtime.ensure_all()
     _write_vbs()
     # Delete old task first
-    for task_name in (AUTOSTART_TASK_NAME, OLD_AUTOSTART_TASK_NAME):
+    for task_name in (AUTOSTART_TASK_NAME, *LEGACY_AUTOSTART_TASK_NAMES):
         subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, creationflags=NO_WINDOW)
     # Create new task with wscript + VBS (hidden window)
     cmd = (
@@ -247,7 +302,7 @@ def enable_autostart():
 
 def disable_autostart():
     ok = False
-    for task_name in (AUTOSTART_TASK_NAME, OLD_AUTOSTART_TASK_NAME):
+    for task_name in (AUTOSTART_TASK_NAME, *LEGACY_AUTOSTART_TASK_NAMES):
         r = subprocess.run(
             ["schtasks", "/delete", "/tn", task_name, "/f"],
             capture_output=True, text=True, creationflags=NO_WINDOW)

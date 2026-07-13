@@ -4,6 +4,7 @@ import sys
 import threading
 import urllib.request
 import webbrowser
+import winreg
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
@@ -19,6 +20,7 @@ from constants import *
 import account_info
 import codex_control
 import codex_repair
+import conversation_guard
 import config_manager
 import gateway
 import restore_manager
@@ -26,54 +28,92 @@ import runtime
 from version import check_update
 
 
-def app_icon():
+def system_dark_mode():
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        return int(winreg.QueryValueEx(key, "AppsUseLightTheme")[0]) == 0
+    except Exception:
+        app = QApplication.instance()
+        return bool(app and app.palette().window().color().lightness() < 128)
+
+
+def app_icon(dark=None):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
-    path = os.path.join(base, "assets", "app_icon.ico")
-    if os.path.exists(path):
-        return QIcon(path)
+    dark = system_dark_mode() if dark is None else dark
+    for name in (("app_logo_light.png" if dark else "app_logo_dark.png"), "app_icon.ico"):
+        path = os.path.join(base, "assets", name)
+        if os.path.exists(path):
+            return QIcon(path)
     return QIcon()
 
 
-QSS = """
-QMainWindow { background: #f5f7fb; }
-QWidget { font-family: "Microsoft YaHei UI", "Segoe UI"; font-size: 13px; color: #172033; }
+LIGHT_QSS = """
+QMainWindow { background: #f8f9fb; }
+QWidget { font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 13px; color: #202124; }
 QLabel { border: none; background: transparent; }
-QLabel#Title { font-size: 26px; font-weight: 800; color: #0b1220; }
-QLabel#Subtitle { color: #64748b; font-size: 14px; }
-QLabel#CardTitle { font-size: 15px; font-weight: 700; color: #0f172a; }
-QLabel#Metric { color: #64748b; font-size: 12px; }
-QLabel#Value { color: #0f172a; font-size: 21px; font-weight: 800; }
-QLabel#Pill { color: #075985; background: #e0f2fe; border-radius: 10px; padding: 5px 10px; font-weight: 700; }
-QWidget#Card { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 14px; }
-QWidget#HeroCard { background: #0f172a; border-radius: 18px; }
-QLabel#HeroTitle { color: white; font-size: 24px; font-weight: 800; }
-QLabel#HeroText { color: #cbd5e1; font-size: 14px; }
-QPushButton { background: #111827; color: #ffffff; border: 0; border-radius: 9px; padding: 9px 16px; font-weight: 600; outline: none; }
-QPushButton:hover { background: #1f2937; }
+QLabel#Title { font-size: 25px; font-weight: 700; color: #202124; }
+QLabel#Subtitle { color: #5f6368; font-size: 13px; }
+QLabel#CardTitle { font-size: 14px; font-weight: 700; color: #202124; }
+QLabel#Metric { color: #70757a; font-size: 12px; }
+QLabel#Value { color: #202124; font-size: 20px; font-weight: 700; }
+QLabel#Pill { color: #0b57d0; background: #e8f0fe; border-radius: 8px; padding: 5px 9px; font-weight: 600; }
+QWidget#Card { background: #ffffff; border: 1px solid #e1e5ea; border-radius: 10px; }
+QWidget#HeroCard { background: #202124; border-radius: 12px; }
+QLabel#HeroTitle { color: #ffffff; font-size: 22px; font-weight: 700; }
+QLabel#HeroText { color: #e8eaed; font-size: 13px; }
+QPushButton { background: #202124; color: #ffffff; border: 1px solid #202124; border-radius: 7px; padding: 8px 14px; font-weight: 600; outline: none; }
+QPushButton:hover { background: #35363a; border-color: #35363a; }
 QPushButton:focus { outline: none; border: 0; }
-QPushButton:pressed { background: #0b1220; padding-top: 10px; padding-bottom: 8px; }
-QPushButton:disabled { background: #d8e0ea; color: #7b8794; }
-QPushButton#Secondary { background: #e8eef6; color: #172033; }
-QPushButton#Secondary:hover { background: #dbe4ef; }
-QPushButton#Danger { background: #dc2626; }
-QPushButton#Danger:hover { background: #b91c1c; }
+QPushButton:pressed { background: #000000; border-color: #000000; }
+QPushButton:disabled { background: #f1f3f4; color: #9aa0a6; border-color: #f1f3f4; }
+QPushButton#Secondary, QPushButton#ModeOption { background: #ffffff; color: #3c4043; border-color: #dadce0; }
+QPushButton#Secondary:hover, QPushButton#ModeOption:hover { background: #f8fafd; border-color: #bdc1c6; }
+QPushButton#Danger { background: #d93025; border-color: #d93025; }
+QPushButton#Danger:hover { background: #b3261e; border-color: #b3261e; }
+QPushButton#ModeActive { background: #e8f0fe; color: #0b57d0; border-color: #a8c7fa; }
+QPushButton#ModeActive:disabled { background: #e8f0fe; color: #0b57d0; border-color: #a8c7fa; }
 QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {
   background: #ffffff; border: 1px solid #d6dee8; border-radius: 9px; padding: 8px;
 }
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {
   border: 1px solid #60a5fa;
 }
-QTableWidget { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 12px; gridline-color: #eef2f7; selection-background-color: #dbeafe; selection-color: #0f172a; outline: none; }
-QTableWidget:focus { outline: none; border: 1px solid #cbd5e1; }
+QTableWidget { background: #ffffff; border: 1px solid #e1e5ea; border-radius: 8px; gridline-color: #eef0f2; selection-background-color: #e8f0fe; selection-color: #202124; outline: none; }
+QTableWidget:focus { outline: none; border: 1px solid #c4c7c5; }
 QTableWidget::item:focus { outline: none; border: 0; }
-QHeaderView::section { background: #f8fafc; color: #334155; padding: 9px; border: 0; border-bottom: 1px solid #e2e8f0; font-weight: 700; }
-QListWidget { background: #0b1220; color: #cbd5e1; border: 0; padding: 14px; font-size: 14px; outline: none; }
-QListWidget::item { padding: 13px 16px; border-radius: 10px; margin: 3px 0; outline: none; border: 0; }
-QListWidget::item:selected { background: #2563eb; color: white; }
+QHeaderView::section { background: #f8f9fa; color: #5f6368; padding: 9px; border: 0; border-bottom: 1px solid #e1e5ea; font-weight: 600; }
+QListWidget { background: #ffffff; color: #3c4043; border: 0; border-right: 1px solid #e1e5ea; padding: 14px 10px; font-size: 14px; outline: none; }
+QListWidget::item { padding: 11px 13px; border-radius: 7px; margin: 2px 0; outline: none; border: 0; }
+QListWidget::item:hover { background: #f1f3f4; }
+QListWidget::item:selected { background: #e8f0fe; color: #0b57d0; font-weight: 600; }
 QListWidget::item:focus { outline: none; border: 0; }
 QProgressDialog { background: #ffffff; border: 1px solid #e7ebf0; border-radius: 12px; }
 QProgressBar { border: 1px solid #d6dee8; border-radius: 7px; background: #eef2f7; text-align: center; min-height: 14px; }
 QProgressBar::chunk { background: #2563eb; border-radius: 7px; }
+"""
+
+DARK_QSS = LIGHT_QSS + """
+QMainWindow { background: #111315; }
+QWidget { color: #e8eaed; }
+QLabel#Title, QLabel#CardTitle, QLabel#Value { color: #f1f3f4; }
+QLabel#Subtitle, QLabel#Metric { color: #9aa0a6; }
+QWidget#Card { background: #1b1e22; border-color: #30343a; }
+QWidget#HeroCard { background: #050607; border: 1px solid #30343a; }
+QPushButton { background: #f1f3f4; color: #17191c; border-color: #f1f3f4; }
+QPushButton:hover { background: #ffffff; border-color: #ffffff; }
+QPushButton:pressed { background: #d8dadd; border-color: #d8dadd; }
+QPushButton:disabled { background: #272a2f; color: #6f7378; border-color: #272a2f; }
+QPushButton#Secondary, QPushButton#ModeOption { background: #202328; color: #e8eaed; border-color: #3a3e44; }
+QPushButton#Secondary:hover, QPushButton#ModeOption:hover { background: #292d32; border-color: #5f6368; }
+QPushButton#ModeActive, QPushButton#ModeActive:disabled { background: #263b61; color: #a8c7fa; border-color: #4d74b7; }
+QLineEdit, QComboBox, QTextEdit, QPlainTextEdit { background: #191c20; color: #e8eaed; border-color: #3a3e44; }
+QTableWidget { background: #17191c; color: #e8eaed; border-color: #30343a; gridline-color: #292d32; selection-background-color: #263b61; selection-color: #ffffff; }
+QHeaderView::section { background: #202328; color: #bdc1c6; border-bottom-color: #3a3e44; }
+QListWidget { background: #111315; color: #d7d9dd; border-right-color: #30343a; }
+QListWidget::item:hover { background: #202328; }
+QListWidget::item:selected { background: #263b61; color: #a8c7fa; }
+QProgressDialog { background: #1b1e22; border-color: #30343a; }
+QProgressBar { background: #292d32; border-color: #3a3e44; }
 """
 
 
@@ -134,6 +174,7 @@ class MainWindow(QMainWindow):
         self._allow_exit = False
         self._task_signals = []
         self._busy_dialog = None
+        self._dark_mode = None
         self._build_ui()
         self._remove_focus_frames()
         self._build_tray()
@@ -141,6 +182,9 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_status)
         self.timer.start(8000)
+        self.theme_timer = QTimer(self)
+        self.theme_timer.timeout.connect(self._refresh_theme)
+        self.theme_timer.start(2000)
 
     def _build_ui(self):
         root = QWidget()
@@ -162,6 +206,17 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._restore_page())
         self.stack.addWidget(self._settings_page())
 
+    def _refresh_theme(self, force=False):
+        dark = system_dark_mode()
+        if not force and dark == self._dark_mode:
+            return
+        self._dark_mode = dark
+        QApplication.instance().setStyleSheet(DARK_QSS if dark else LIGHT_QSS)
+        icon = app_icon(dark)
+        self.setWindowIcon(icon)
+        if hasattr(self, "tray"):
+            self.tray.setIcon(icon)
+
     def _page(self, title, subtitle):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -176,7 +231,7 @@ class MainWindow(QMainWindow):
         return page, layout
 
     def _status_page(self):
-        page, layout = self._page("Codex Gateway", "统一托管 Codex 官方模型和第三方 API 模型")
+        page, layout = self._page("Codex Gateway", "纯官方直连；混合模式由本地网关转发官方订阅与第三方 API")
         self.mode_hero = HeroCard()
         layout.addWidget(self.mode_hero)
         grid = QGridLayout()
@@ -238,6 +293,7 @@ class MainWindow(QMainWindow):
         self.config_table.setHorizontalHeaderLabels(["序号", "展示名称", "模型ID", "上游模型", "供应商", "类型", "URL", "上下文", "最大输出", "标记"])
         self.config_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.config_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        self.config_table.verticalHeader().setVisible(False)
         self.config_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.config_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.config_table, 1)
@@ -282,26 +338,41 @@ class MainWindow(QMainWindow):
         return page
 
     def _settings_page(self):
-        page, layout = self._page("设置", "登录模式、自启、端口、版本更新")
+        page, layout = self._page("设置", "模式、会话保护、网关与版本")
         status = Card("Codex 登录状态")
         self.mode_label = QLabel("检测中")
         status.layout.addWidget(self.mode_label)
         self.provider_state_label = QLabel("")
         status.layout.addWidget(self.provider_state_label)
         mode_btns = QHBoxLayout()
-        for text, fn, obj in [
-            ("启动官方登录流程", self._codex_login, ""),
-            ("切到纯官方订阅", self._switch_official_only, "Secondary"),
-            ("切到官方订阅 + 第三方 API", lambda: self._repair_codex(True), "Secondary"),
-            ("切到纯 API + 第三方模型", lambda: self._repair_codex(False), "Secondary"),
+        self.mode_buttons = {}
+        for key, text, fn in [
+            ("pure_official", "纯官方订阅", self._switch_official_only),
+            ("official_plus_api", "官方订阅 + 第三方 API", lambda: self._repair_codex(True)),
+            ("api_only", "纯 API + 第三方模型", lambda: self._repair_codex(False)),
         ]:
             b = QPushButton(text)
-            if obj:
-                b.setObjectName(obj)
+            b.setObjectName("ModeOption")
             b.clicked.connect(fn)
+            self.mode_buttons[key] = b
             mode_btns.addWidget(b)
         status.layout.addLayout(mode_btns)
         layout.addWidget(status)
+
+        conversations = Card("会话保护")
+        self.conversation_label = QLabel("")
+        conversations.layout.addWidget(self.conversation_label)
+        conversation_btns = QHBoxLayout()
+        snapshot = QPushButton("创建会话索引快照")
+        repair = QPushButton("修复侧栏会话（需退出 ChatGPT）")
+        repair.setObjectName("Secondary")
+        snapshot.clicked.connect(self._snapshot_conversations)
+        repair.clicked.connect(self._repair_conversation_index)
+        conversation_btns.addWidget(snapshot)
+        conversation_btns.addWidget(repair)
+        conversation_btns.addStretch(1)
+        conversations.layout.addLayout(conversation_btns)
+        layout.addWidget(conversations)
 
         auto = Card("开机自启与端口")
         self.auto_label = QLabel("")
@@ -329,7 +400,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(auto)
 
         about = Card("关于")
-        self.version_label = QLabel(APP_VERSION + "  ·  zhaoxinyi02/codex-gateway-manager")
+        self.version_label = QLabel(APP_VERSION + "  ·  ModelDock")
         about.layout.addWidget(self.version_label)
         up = QPushButton("检查更新")
         up.clicked.connect(lambda: self._run_task("正在检查更新", self._check_update, self._update_done))
@@ -356,7 +427,7 @@ class MainWindow(QMainWindow):
         show = QAction("显示窗口", self)
         show.triggered.connect(self.show_window)
         start = QAction("启动/重启网关", self)
-        start.triggered.connect(lambda: self._run_task("正在重启网关", self._restart_gateway, self._gateway_done))
+        start.triggered.connect(self._tray_restart_gateway)
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.exit_app)
         menu.addAction(show)
@@ -402,10 +473,15 @@ class MainWindow(QMainWindow):
         self.codex_restart_btn.setEnabled(cs["running"])
 
         ai = account_info.get_account_info()
+        if ai["mode_key"] == "pure_official":
+            self.gateway_start_btn.setEnabled(False)
+            self.gateway_restart_btn.setEnabled(False)
+            self.gateway_status.setText("已按纯官方模式停止")
+            self.gateway_detail.setText("纯官方订阅模式不会启动本地网关")
         self.mode_hero.title.setText(ai["mode"])
         desc_map = {
             "pure_official": "当前 Codex 使用官方 provider，没有接入本地 CLIProxyAPI 第三方模型网关。",
-            "official_plus_api": "当前 Codex 使用本地 CLIProxyAPI provider，同时保留官方订阅登录，可在同一会话里切换官方模型和第三方 API 模型。",
+            "official_plus_api": "当前由本地网关转发官方订阅凭据与第三方 API，可在同一模型列表中切换。",
             "api_only": "当前 Codex 使用本地 CLIProxyAPI provider，不依赖官方订阅登录，适合只用自配 API 的用户。",
             "not_logged_in": "Codex 已安装，但未检测到官方账号登录。",
             "not_installed": "未检测到 Codex Desktop 安装。",
@@ -452,7 +528,7 @@ class MainWindow(QMainWindow):
 
     def refresh_settings(self):
         ai = account_info.get_account_info()
-        self.mode_label.setText("当前模式: {mode}\n邮箱: {email}\n套餐: {plan}\n说明: 纯官方订阅 / 官方订阅 + 第三方 API / 纯 API + 第三方模型会在这里明确区分。".format(**ai))
+        self.mode_label.setText("当前模式：{mode}\n账号：{email}    套餐：{plan}".format(**ai))
         st = codex_repair.read_effective_provider_state()
         auth = st["requires_openai_auth"]
         if auth is True:
@@ -462,9 +538,20 @@ class MainWindow(QMainWindow):
         else:
             auth_text = "未设置"
         self.provider_state_label.setText(
-            "实际配置: model_provider = {model_provider}；requires_openai_auth = {auth}".format(
+            "实际配置：model_provider = {model_provider}；requires_openai_auth = {auth}".format(
                 model_provider=st["model_provider"], auth=auth_text
             )
+        )
+        for key, button in getattr(self, "mode_buttons", {}).items():
+            active = key == ai["mode_key"]
+            button.setObjectName("ModeActive" if active else "ModeOption")
+            button.setEnabled(not active)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        conversation = conversation_guard.get_status()
+        self.conversation_label.setText(
+            "本地会话：{active_sessions} 个活动 / {archived_sessions} 个归档；侧栏索引：{indexed_threads} 条；索引快照：{snapshots} 份。"
+            .format(**conversation)
         )
         try:
             self.port_edit.setText(str(config_manager.get_port()))
@@ -479,8 +566,11 @@ class MainWindow(QMainWindow):
 
     def _after_config_change(self, name):
         config_manager.ensure_builtin_model()
+        if account_info.get_account_info()["mode_key"] == "pure_official":
+            gateway.stop()
+            return True
         ok = gateway.restart()
-        if gateway.is_responding():
+        if ok and gateway.is_responding():
             restore_manager.create_restore_point("auto", name, "配置修改后自动保存")
         return ok
 
@@ -543,26 +633,86 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "确认回退", "回退会覆盖当前 Codex/网关配置，继续?") == QMessageBox.Yes:
             def work():
                 restore_manager.restore(p["id"])
+                if account_info.get_account_info()["mode_key"] == "pure_official":
+                    gateway.stop()
+                    return True
                 return gateway.restart()
             self._run_task("正在恢复回退点并重启网关", work, lambda ok: self._config_done(ok, "已恢复回退点。"))
 
     def _repair_codex(self, requires_auth):
         def work():
+            conversation = conversation_guard.capture_state("before-mode-switch")
+            was_running = codex_control.is_running()
+            if was_running and not codex_control.stop():
+                return False, "无法安全停止 Codex，未切换模式。"
             restore_manager.create_restore_point("auto", "before-codex-mode-switch", "切换登录模式前自动保存")
-            ok, msg = codex_repair.repair_codex_config(requires_auth)
-            if ok:
-                restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
-            return ok, msg
+            try:
+                config_manager.expose_display_names_to_codex()
+                gateway_ok = gateway.start()
+                if not gateway_ok:
+                    return False, "网关未能启动，未切换 Codex 配置。"
+                probe_message = ""
+                if requires_auth:
+                    probe_ok, probe_message = gateway.probe_official_subscription()
+                    if not probe_ok:
+                        gateway.stop()
+                        return False, probe_message + " 未切换模式，已保留原有纯官方配置。"
+                ok, msg = codex_repair.repair_codex_config(requires_auth)
+                if ok:
+                    restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
+                    suffix = " " + probe_message if requires_auth else ""
+                    return True, msg + " 网关已启动。切换前的会话列表、归档和删除状态已原样恢复。" + suffix
+                gateway.stop()
+                return False, msg
+            finally:
+                conversation_guard.restore_state(conversation)
+                if was_running:
+                    codex_control.start()
         self._run_task("正在切换 Codex 登录模式", work, self._mode_switch_done)
 
     def _switch_official_only(self):
         def work():
+            conversation = conversation_guard.capture_state("before-official-switch")
+            was_running = codex_control.is_running()
+            if was_running and not codex_control.stop():
+                return False, "无法安全停止 Codex，未切换模式。"
             restore_manager.create_restore_point("auto", "before-official-only", "切换纯官方订阅前自动保存")
-            ok, msg = codex_repair.switch_to_official_only()
-            if ok:
-                restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
-            return ok, msg
+            try:
+                ok, msg = codex_repair.switch_to_official_only()
+                gateway.disable_autostart()
+                stopped = gateway.stop()
+                if ok and stopped:
+                    restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
+                    return True, msg + " 网关已停止，自启已关闭。切换前的会话列表、归档和删除状态已原样恢复。"
+                return False, msg if not ok else "已写入官方模式，但网关未能停止。"
+            finally:
+                conversation_guard.restore_state(conversation)
+                if was_running:
+                    codex_control.start()
         self._run_task("正在切换为纯官方订阅", work, self._mode_switch_done)
+
+    def _snapshot_conversations(self):
+        conversation_guard.snapshot("manual")
+        self.refresh_settings()
+        self._info("已创建会话索引快照。会话内容文件未被复制、移动或修改。")
+
+    def _repair_conversation_index(self):
+        if codex_control.is_running():
+            self._warn("请先完全退出 ChatGPT/Codex，再执行侧栏会话修复。应用运行时可能在退出时覆盖索引。")
+            return
+        if QMessageBox.question(
+            self,
+            "修复侧栏会话",
+            "此操作会先备份当前侧栏索引，再从本地会话元数据补齐可见索引。不会修改任何 .jsonl 会话内容。继续？",
+        ) != QMessageBox.Yes:
+            return
+        def work():
+            return conversation_guard.rebuild_visible_index()
+        self._run_task("正在修复侧栏会话索引", work, self._conversation_repair_done)
+
+    def _conversation_repair_done(self, result):
+        self.refresh_settings()
+        self._info("已补齐 {} 条本地会话索引。请完全退出并重新打开 ChatGPT/Codex，以重新加载侧栏。".format(result["recovered"]))
 
     def _codex_login(self):
         if gateway.run_codex_login():
@@ -572,6 +722,12 @@ class MainWindow(QMainWindow):
 
     def _start_gateway(self):
         return gateway.start()
+
+    def _tray_restart_gateway(self):
+        if account_info.get_account_info()["mode_key"] == "pure_official":
+            self._warn("当前是纯官方订阅模式。请先在设置中切换到“官方订阅 + 第三方 API”或“纯 API + 第三方模型”。")
+            return
+        self._run_task("正在重启网关", self._restart_gateway, self._gateway_done)
 
     def _stop_gateway(self):
         return gateway.stop()
@@ -766,7 +922,7 @@ class ModelDialog(QDialog):
         fetch.clicked.connect(self._fetch_models)
         row.addWidget(fetch)
         form.addRow("上游模型 ID", row)
-        form.addRow("Codex 模型 ID", self.alias)
+        form.addRow("Codex 模型 ID（下拉列表回退名）", self.alias)
         form.addRow("展示名称", self.display_name)
         form.addRow("供应商名称", self.provider_name)
         form.addRow("上下文 token", self.ctx)
@@ -915,7 +1071,7 @@ def run():
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(app_icon())
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(DARK_QSS if system_dark_mode() else LIGHT_QSS)
     if not _takeover_if_needed():
         return
     w = MainWindow()

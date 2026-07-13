@@ -1,7 +1,7 @@
-APP_NAME = "Codex Gateway Manager"
-APP_VERSION = "V2026.07.09"
+APP_NAME = "ModelDock"
+APP_VERSION = "V2026.07.13a"
 GITHUB_OWNER = "zhaoxinyi02"
-GITHUB_REPO = "codex-gateway-manager"
+GITHUB_REPO = "modeldock"
 
 import os, tempfile
 LOCAL_APPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
@@ -32,5 +32,7 @@ BUILTIN_CONTEXT_WINDOW = 200000
 BUILTIN_MAX_OUTPUT_TOKENS = 128000
 BUILTIN_KEY_ENV = "BUILTIN_GLM_API_KEY"
 
-AUTOSTART_TASK_NAME = "Codex Gateway Manager"
-OLD_AUTOSTART_TASK_NAME = "CLIProxyAPI for Codex"
+AUTOSTART_TASK_NAME = "ModelDock"
+# These are removed automatically when users enable/disable autostart after
+# upgrading, so the product rename never leaves duplicate background tasks.
+LEGACY_AUTOSTART_TASK_NAMES = ("Codex Gateway Manager", "CLIProxyAPI for Codex")
