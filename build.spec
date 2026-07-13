@@ -4,7 +4,7 @@ src_dir = os.path.join(os.path.abspath('.'), 'src')
 asset_exe = os.path.join(os.path.abspath('.'), 'assets', 'cli-proxy-api.exe')
 binaries = [(asset_exe, '.')] if os.path.exists(asset_exe) else []
 datas = []
-for name in ('app_icon.ico', 'app_logo_dark.png', 'app_logo_light.png', 'logo.png'):
+for name in ('app_icon.ico', 'app_icon_dark.ico', 'app_icon_light.ico', 'app_logo_dark.png', 'app_logo_light.png', 'logo.png'):
     path = os.path.join(os.path.abspath('.'), 'assets', name)
     if os.path.exists(path):
         datas.append((path, 'assets'))

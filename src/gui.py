@@ -40,7 +40,11 @@ def system_dark_mode():
 def app_icon(dark=None):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
     dark = system_dark_mode() if dark is None else dark
-    for name in (("app_logo_light.png" if dark else "app_logo_dark.png"), "app_icon.ico"):
+    for name in (
+        ("app_icon_light.ico" if dark else "app_icon_dark.ico"),
+        ("app_logo_light.png" if dark else "app_logo_dark.png"),
+        "app_icon.ico",
+    ):
         path = os.path.join(base, "assets", name)
         if os.path.exists(path):
             return QIcon(path)
