@@ -5,7 +5,7 @@ try:
 except Exception:
     BUILTIN_GLM_API_KEY = ""
 
-BUILTIN_ALIASES = {BUILTIN_ALIAS, BUILTIN_MODEL_ID}
+BUILTIN_ALIASES = {BUILTIN_ALIAS, BUILTIN_MODEL_ID, BUILTIN_DISPLAY_NAME}
 
 DEFAULT_MODEL_TEMPLATE = {
     "slug": "template",
@@ -30,6 +30,11 @@ DEFAULT_MODEL_TEMPLATE = {
 
 def _builtin_key():
     return (os.environ.get(BUILTIN_KEY_ENV) or BUILTIN_GLM_API_KEY or "").strip()
+
+
+def _builtin_alias_like(value):
+    value = str(value or "").strip()
+    return value in BUILTIN_ALIASES or value.startswith(BUILTIN_DISPLAY_NAME + " (")
 
 
 def ensure_base_files():
@@ -152,6 +157,14 @@ def expose_display_names_to_codex():
     changes = []
     for item in collect_entries(cfg):
         old = item["alias"]
+        entry = cfg[item["section"]][item["entry_index"]]
+        configured_model = entry["models"][item["model_index"]]
+        if item["built_in"]:
+            # The bundled provider has one immutable client-facing model.  It
+            # is canonicalized by ensure_builtin_model(); never rename it here
+            # or every refresh would create another numbered copy.
+            used.add(BUILTIN_DISPLAY_NAME.casefold())
+            continue
         catalog_model = by_slug.get(old)
         if not catalog_model:
             continue
@@ -162,15 +175,22 @@ def expose_display_names_to_codex():
             desired = "{} ({})".format(base, n)
             n += 1
         used.add(desired.casefold())
-        if desired == old:
-            continue
-        entry = cfg[item["section"]][item["entry_index"]]
-        entry["models"][item["model_index"]]["alias"] = desired
-        catalog_model["slug"] = desired
-        catalog_model["x_legacy_alias"] = old
-        set_max_output(cfg, desired, get_max_output(cfg, old))
-        set_max_output(cfg, old, None)
-        changes.append((old, desired))
+        model_changed = False
+        if configured_model.get("display-name") != desired:
+            configured_model["display-name"] = desired
+            model_changed = True
+        if item["section"] == "codex-api-key" and configured_model.get("force-mapping") is not True:
+            configured_model["force-mapping"] = True
+            model_changed = True
+        if desired != old:
+            configured_model["alias"] = desired
+            catalog_model["slug"] = desired
+            catalog_model["x_legacy_alias"] = old
+            set_max_output(cfg, desired, get_max_output(cfg, old))
+            set_max_output(cfg, old, None)
+            changes.append((old, desired))
+        elif model_changed:
+            changes.append((old, desired))
     if changes:
         save_config(cfg)
         save_catalog(cat)
@@ -560,24 +580,37 @@ def ensure_builtin_model():
         if entries[0].get("api-key") != key:
             entries[0]["api-key"] = key
             changed = True
-        model = next((m for m in entry.setdefault("models", []) if m.get("alias") == BUILTIN_ALIAS), None)
-        if not model:
-            entry["models"].insert(0, {"name": BUILTIN_MODEL_ID, "alias": BUILTIN_ALIAS})
-            changed = True
-        elif model.get("name") != BUILTIN_MODEL_ID:
-            model["name"] = BUILTIN_MODEL_ID
-            changed = True
+    canonical_model = {
+        "name": BUILTIN_MODEL_ID,
+        "alias": BUILTIN_DISPLAY_NAME,
+        "display-name": BUILTIN_DISPLAY_NAME,
+    }
+    if entry.get("models") != [canonical_model]:
+        # This provider is intentionally immutable, so any extra model here is
+        # necessarily a duplicate left by an older ModelDock build.
+        entry["models"] = [canonical_model]
+        changed = True
 
     by_slug = {m.get("slug"): m for m in models if isinstance(m, dict)}
     template = by_slug.get("gpt-5.5") or (models[0] if models else DEFAULT_MODEL_TEMPLATE)
-    cat_model = by_slug.get(BUILTIN_ALIAS)
+    cat_model = next((
+        m for m in models if isinstance(m, dict) and (
+            m.get("x_gateway_builtin") is True
+            or (_builtin_alias_like(m.get("slug")) and m.get("display_name") == BUILTIN_DISPLAY_NAME)
+        )
+    ), None)
     if not cat_model:
         cat_model = copy.deepcopy(template)
         changed = True
-    models[:] = [m for m in models if not (isinstance(m, dict) and m.get("slug") == BUILTIN_ALIAS)]
+    models[:] = [m for m in models if not (
+        isinstance(m, dict) and (
+            m.get("x_gateway_builtin") is True
+            or (_builtin_alias_like(m.get("slug")) and m.get("display_name") == BUILTIN_DISPLAY_NAME)
+        )
+    )]
     models.insert(0, cat_model)
     cat_model.update({
-        "slug": BUILTIN_ALIAS,
+        "slug": BUILTIN_DISPLAY_NAME,
         "display_name": BUILTIN_DISPLAY_NAME,
         "name": BUILTIN_DISPLAY_NAME,
         "description": BUILTIN_PROVIDER_NAME,
@@ -586,14 +619,22 @@ def ensure_builtin_model():
         "context_window": BUILTIN_CONTEXT_WINDOW,
         "max_context_window": BUILTIN_CONTEXT_WINDOW,
         "effective_context_window_percent": 95,
-        "priority": min([int(m.get("priority", 1000)) for m in models if isinstance(m, dict)] + [1000]) - 1,
+        "priority": min([
+            int(m.get("priority", 1000)) for m in models
+            if isinstance(m, dict) and m is not cat_model
+        ] + [1000]) - 1,
         "additional_speed_tiers": [],
         "service_tiers": [],
         "availability_nux": None,
         "upgrade": None,
         "x_gateway_builtin": True,
     })
-    set_payload_params(cfg, BUILTIN_ALIAS, {
+    payload = cfg.setdefault("payload", {}).setdefault("default", [])
+    payload[:] = [rule for rule in payload if not any(
+        _builtin_alias_like(model.get("name"))
+        for model in (rule.get("models") or []) if isinstance(model, dict)
+    )]
+    set_payload_params(cfg, BUILTIN_DISPLAY_NAME, {
         "max_output_tokens": BUILTIN_MAX_OUTPUT_TOKENS,
         "thinking": {"type": "disabled"},
     })
