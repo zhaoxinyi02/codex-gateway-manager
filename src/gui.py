@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
         conversations.layout.addWidget(self.conversation_label)
         conversation_btns = QHBoxLayout()
         snapshot = QPushButton("创建会话索引快照")
-        repair = QPushButton("修复侧栏会话（需退出 ChatGPT）")
+        repair = QPushButton("修复并统一会话列表")
         repair.setObjectName("Secondary")
         snapshot.clicked.connect(self._snapshot_conversations)
         repair.clicked.connect(self._repair_conversation_index)
@@ -654,6 +654,8 @@ class MainWindow(QMainWindow):
             conversation_guard.capture_state("before-mode-switch")
             conversation_guard.synchronize_sidebar_indexes()
             restore_manager.create_restore_point("auto", "before-codex-mode-switch", "切换登录模式前自动保存")
+            migration = None
+            config_switched = False
             try:
                 config_manager.expose_display_names_to_codex()
                 gateway_ok = gateway.start()
@@ -665,13 +667,22 @@ class MainWindow(QMainWindow):
                     if not probe_ok:
                         gateway.stop()
                         return False, probe_message + " 未切换模式，已保留原有纯官方配置。"
+                migration = conversation_guard.migrate_desktop_conversations("cliproxyapi")
                 ok, msg = codex_repair.repair_codex_config(requires_auth)
                 if ok:
+                    config_switched = True
                     restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
                     suffix = " " + probe_message if requires_auth else ""
-                    return True, msg + " 网关已启动。会话列表、归档和删除状态未被修改。" + suffix
+                    return True, msg + " 网关已启动。已同步迁移 {} 条桌面会话。".format(migration["sessions_seen"]) + suffix
+                if migration:
+                    conversation_guard.restore_provider_snapshot(migration["snapshot"])
                 gateway.stop()
                 return False, msg
+            except Exception:
+                if migration and not config_switched:
+                    conversation_guard.restore_provider_snapshot(migration["snapshot"])
+                gateway.stop()
+                raise
             finally:
                 if was_running:
                     codex_control.start()
@@ -685,14 +696,25 @@ class MainWindow(QMainWindow):
             conversation_guard.capture_state("before-official-switch")
             conversation_guard.synchronize_sidebar_indexes()
             restore_manager.create_restore_point("auto", "before-official-only", "切换纯官方订阅前自动保存")
+            migration = None
+            config_switched = False
             try:
+                migration = conversation_guard.migrate_desktop_conversations("openai")
                 ok, msg = codex_repair.switch_to_official_only()
+                if not ok:
+                    conversation_guard.restore_provider_snapshot(migration["snapshot"])
+                    return False, msg
+                config_switched = True
                 gateway.disable_autostart()
                 stopped = gateway.stop()
                 if ok and stopped:
                     restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
-                    return True, msg + " 网关已停止，自启已关闭。会话列表、归档和删除状态未被修改。"
+                    return True, msg + " 网关已停止，自启已关闭。已同步迁移 {} 条桌面会话。".format(migration["sessions_seen"])
                 return False, msg if not ok else "已写入官方模式，但网关未能停止。"
+            except Exception:
+                if migration and not config_switched:
+                    conversation_guard.restore_provider_snapshot(migration["snapshot"])
+                raise
             finally:
                 if was_running:
                     codex_control.start()
@@ -704,22 +726,36 @@ class MainWindow(QMainWindow):
         self._info("已创建会话索引快照。会话内容文件未被复制、移动或修改。")
 
     def _repair_conversation_index(self):
-        if codex_control.is_running():
-            self._warn("请先完全退出 ChatGPT/Codex，再执行侧栏会话修复。应用运行时可能在退出时覆盖索引。")
-            return
         if QMessageBox.question(
             self,
-            "修复侧栏会话",
-            "此操作会先备份当前侧栏索引，再从本地会话元数据补齐可见索引。不会修改任何 .jsonl 会话内容。继续？",
+            "修复会话列表",
+            "此操作会先完整记录会话首行元数据并备份 SQLite，然后把所有桌面会话统一到当前模式的 provider，同时修复侧栏索引。不会改动会话正文，失败会自动回滚。继续？",
         ) != QMessageBox.Yes:
             return
         def work():
-            return conversation_guard.rebuild_visible_index()
-        self._run_task("正在修复侧栏会话索引", work, self._conversation_repair_done)
+            was_running = codex_control.is_running()
+            if was_running and not codex_control.stop():
+                raise RuntimeError("无法安全停止 ChatGPT/Codex，未修改会话。")
+            try:
+                mode = account_info.get_account_info()["mode_key"]
+                target = "openai" if mode == "pure_official" else "cliproxyapi"
+                migration = conversation_guard.migrate_desktop_conversations(target)
+                index = conversation_guard.rebuild_visible_index()
+                migration.update(index)
+                return migration
+            finally:
+                if was_running:
+                    codex_control.start()
+        self._run_task("正在备份、统一并修复会话", work, self._conversation_repair_done)
 
     def _conversation_repair_done(self, result):
         self.refresh_settings()
-        self._info("已补齐 {} 条本地会话索引。请完全退出并重新打开 ChatGPT/Codex，以重新加载侧栏。".format(result["recovered"]))
+        self._info(
+            "已统一 {} 条桌面会话到 {}，其中修改会话文件 {} 条、数据库记录 {} 条；侧栏索引现有 {} 条。请重新打开 ChatGPT/Codex。".format(
+                result["sessions_seen"], result["target_provider"], result["sessions_changed"],
+                result["database_changed"], result["recovered"]
+            )
+        )
 
     def _codex_login(self):
         if gateway.run_codex_login():
