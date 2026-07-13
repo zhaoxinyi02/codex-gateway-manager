@@ -11,6 +11,7 @@ GLOBAL_STATE_PATH = os.path.join(CODEX_HOME, ".codex-global-state.json")
 SESSION_ROOT = os.path.join(CODEX_HOME, "sessions")
 ARCHIVED_SESSION_ROOT = os.path.join(CODEX_HOME, "archived_sessions")
 SNAPSHOT_ROOT = os.path.join(APP_RUNTIME_DIR, "conversation-index-backups")
+UNIFIED_MARKER = "modeldock-sidebar-index-unified-v1"
 
 
 def _session_files(root):
@@ -90,6 +91,65 @@ def restore_state(capture):
     return True
 
 
+def synchronize_sidebar_indexes():
+    """Migrate the legacy Codex sidebar index to the new ChatGPT layout.
+
+    The unified ChatGPT/Codex desktop stores its canonical projectless index at
+    the JSON root. Older Codex builds stored the same values inside
+    ``electron-persisted-atom-state``. On the first run we merge both active
+    sets. Afterward the new root is authoritative, so archived/deleted threads
+    cannot be resurrected by stale legacy data.
+    """
+    if not os.path.exists(GLOBAL_STATE_PATH):
+        return {"changed": False, "threads": 0}
+    state = _read_json(GLOBAL_STATE_PATH, {})
+    atom = state.setdefault("electron-persisted-atom-state", {})
+    top_ids = state.get("projectless-thread-ids") or []
+    legacy_ids = atom.get("projectless-thread-ids") or []
+    active_ids = set()
+    for path in _session_files(SESSION_ROOT):
+        meta = _read_session_meta(path)
+        if meta:
+            active_ids.add(meta["id"])
+
+    if state.get(UNIFIED_MARKER):
+        merged = [sid for sid in top_ids if sid in active_ids]
+    else:
+        merged = []
+        seen = set()
+        for sid in list(top_ids) + list(legacy_ids):
+            if sid in active_ids and sid not in seen:
+                seen.add(sid)
+                merged.append(sid)
+
+    top_roots = state.get("thread-workspace-root-hints") or {}
+    legacy_roots = atom.get("thread-workspace-root-hints") or {}
+    roots = {}
+    for sid in merged:
+        value = top_roots.get(sid) or legacy_roots.get(sid)
+        if value:
+            roots[sid] = value
+
+    changed = (
+        top_ids != merged
+        or legacy_ids != merged
+        or state.get("thread-workspace-root-hints") != roots
+        or atom.get("thread-workspace-root-hints") != roots
+        or not state.get(UNIFIED_MARKER)
+    )
+    if changed:
+        state["projectless-thread-ids"] = merged
+        state["thread-workspace-root-hints"] = roots
+        atom["projectless-thread-ids"] = list(merged)
+        atom["thread-workspace-root-hints"] = dict(roots)
+        state[UNIFIED_MARKER] = True
+        temp = GLOBAL_STATE_PATH + ".new"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, separators=(",", ":"))
+        os.replace(temp, GLOBAL_STATE_PATH)
+    return {"changed": changed, "threads": len(merged)}
+
+
 def _read_session_meta(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -110,33 +170,7 @@ def _read_session_meta(path):
 
 
 def rebuild_visible_index():
-    """Rebuild only local sidebar hints; session JSONL files are never modified."""
+    """Repair both old and new local sidebar indexes; JSONL is untouched."""
     snapshot("before-index-rebuild")
-    state = _read_json(GLOBAL_STATE_PATH, {})
-    atom = state.setdefault("electron-persisted-atom-state", {})
-    descriptions = atom.setdefault("thread-descriptions-v1", {})
-    roots = atom.setdefault("thread-workspace-root-hints", {})
-
-    entries = []
-    for path in _session_files(SESSION_ROOT):
-        meta = _read_session_meta(path)
-        if meta and meta["source"] == "vscode" and meta["thread_source"] == "user":
-            entries.append(meta)
-    entries.sort(key=lambda item: item["mtime"], reverse=True)
-
-    visible_ids = []
-    for item in entries:
-        session_id = item["id"]
-        visible_ids.append(session_id)
-        descriptions.setdefault(session_id, "已恢复的本地会话")
-        if item["cwd"]:
-            roots.setdefault(session_id, item["cwd"])
-
-    # This was the pre-migration desktop index. Newer builds still preserve it
-    # as a harmless local hint, while sessions remain the source of truth.
-    atom["projectless-thread-ids"] = visible_ids
-    temp = GLOBAL_STATE_PATH + ".new"
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, ensure_ascii=False, separators=(",", ":"))
-    os.replace(temp, GLOBAL_STATE_PATH)
-    return {"recovered": len(visible_ids), "snapshot": SNAPSHOT_ROOT}
+    result = synchronize_sidebar_indexes()
+    return {"recovered": result["threads"], "snapshot": SNAPSHOT_ROOT}

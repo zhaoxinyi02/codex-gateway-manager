@@ -9,8 +9,10 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _codex_processes():
     try:
         ps = (
-            "Get-Process Codex -ErrorAction SilentlyContinue | "
-            "Select-Object Id,Path | ConvertTo-Json -Compress"
+            "Get-Process Codex,ChatGPT -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.ProcessName -eq 'Codex' -or "
+            "($_.ProcessName -eq 'ChatGPT' -and ($_.Path -like '*OpenAI.Codex_*' -or $_.Path -like '*OpenAI\\Codex*')) } | "
+            "Select-Object Id,Path,ProcessName | ConvertTo-Json -Compress"
         )
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", ps],
@@ -23,7 +25,7 @@ def _codex_processes():
         if isinstance(data, dict):
             data = [data]
         return [
-            {"pid": int(x.get("Id")), "path": x.get("Path") or ""}
+            {"pid": int(x.get("Id")), "path": x.get("Path") or "", "name": x.get("ProcessName") or ""}
             for x in data if x.get("Id")
         ]
     except Exception:
@@ -46,10 +48,12 @@ def get_status():
 def _candidate_paths():
     local = os.environ.get("LOCALAPPDATA", "")
     candidates = [
+        os.path.join(local, "OpenAI", "Codex", "ChatGPT.exe"),
         os.path.join(local, "OpenAI", "Codex", "Codex.exe"),
         os.path.join(local, "codex", "Codex.exe"),
     ]
     candidates.extend(glob.glob(os.path.join(local, "Packages", "OpenAI.Codex_*", "LocalCache", "*", "Codex.exe")))
+    candidates.extend(glob.glob(os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "WindowsApps", "OpenAI.Codex_*", "app", "ChatGPT.exe")))
     candidates.extend(glob.glob(os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "WindowsApps", "OpenAI.Codex_*", "app", "Codex.exe")))
     for path in candidates:
         if path and os.path.exists(path):
@@ -59,7 +63,7 @@ def _candidate_paths():
 def _app_ids():
     ids = ["OpenAI.Codex_2p2nqsd0c76g0!App"]
     try:
-        ps = "Get-StartApps | Where-Object { $_.Name -eq 'Codex' -or $_.Name -like '*Codex*' } | Select-Object -ExpandProperty AppID"
+        ps = "Get-StartApps | Where-Object { $_.Name -eq 'ChatGPT' -or $_.Name -eq 'Codex' -or $_.Name -like '*Codex*' } | Select-Object -ExpandProperty AppID"
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", ps],
             capture_output=True, text=True, timeout=8, creationflags=NO_WINDOW,
@@ -107,12 +111,19 @@ def start():
 
 
 def stop():
-    for proc in _codex_processes():
+    # Kill the ChatGPT desktop roots before their Codex children. Killing only
+    # codex.exe lets the Electron shell immediately respawn it and later write
+    # a stale in-memory sidebar state back to disk.
+    processes = sorted(_codex_processes(), key=lambda p: p.get("name") != "ChatGPT")
+    for proc in processes:
         try:
-            subprocess.run(["taskkill", "/pid", str(proc["pid"]), "/f"], capture_output=True, timeout=8, creationflags=NO_WINDOW)
+            subprocess.run(["taskkill", "/pid", str(proc["pid"]), "/t", "/f"], capture_output=True, timeout=8, creationflags=NO_WINDOW)
         except Exception:
             pass
-    time.sleep(1)
+    for _ in range(30):
+        if not is_running():
+            return True
+        time.sleep(0.2)
     return not is_running()
 
 

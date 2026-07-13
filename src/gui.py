@@ -641,10 +641,14 @@ class MainWindow(QMainWindow):
 
     def _repair_codex(self, requires_auth):
         def work():
-            conversation = conversation_guard.capture_state("before-mode-switch")
             was_running = codex_control.is_running()
             if was_running and not codex_control.stop():
                 return False, "无法安全停止 Codex，未切换模式。"
+            # The desktop app has now flushed its current sidebar/archive state.
+            # Keep a safety snapshot, but do not overwrite the live state after
+            # switching: provider changes never need to rewrite conversations.
+            conversation_guard.capture_state("before-mode-switch")
+            conversation_guard.synchronize_sidebar_indexes()
             restore_manager.create_restore_point("auto", "before-codex-mode-switch", "切换登录模式前自动保存")
             try:
                 config_manager.expose_display_names_to_codex()
@@ -661,21 +665,21 @@ class MainWindow(QMainWindow):
                 if ok:
                     restore_manager.create_restore_point("auto", "codex-mode-switch", "切换登录模式后自动保存")
                     suffix = " " + probe_message if requires_auth else ""
-                    return True, msg + " 网关已启动。切换前的会话列表、归档和删除状态已原样恢复。" + suffix
+                    return True, msg + " 网关已启动。会话列表、归档和删除状态未被修改。" + suffix
                 gateway.stop()
                 return False, msg
             finally:
-                conversation_guard.restore_state(conversation)
                 if was_running:
                     codex_control.start()
         self._run_task("正在切换 Codex 登录模式", work, self._mode_switch_done)
 
     def _switch_official_only(self):
         def work():
-            conversation = conversation_guard.capture_state("before-official-switch")
             was_running = codex_control.is_running()
             if was_running and not codex_control.stop():
                 return False, "无法安全停止 Codex，未切换模式。"
+            conversation_guard.capture_state("before-official-switch")
+            conversation_guard.synchronize_sidebar_indexes()
             restore_manager.create_restore_point("auto", "before-official-only", "切换纯官方订阅前自动保存")
             try:
                 ok, msg = codex_repair.switch_to_official_only()
@@ -683,10 +687,9 @@ class MainWindow(QMainWindow):
                 stopped = gateway.stop()
                 if ok and stopped:
                     restore_manager.create_restore_point("auto", "official-only", "切换纯官方订阅后自动保存")
-                    return True, msg + " 网关已停止，自启已关闭。切换前的会话列表、归档和删除状态已原样恢复。"
+                    return True, msg + " 网关已停止，自启已关闭。会话列表、归档和删除状态未被修改。"
                 return False, msg if not ok else "已写入官方模式，但网关未能停止。"
             finally:
-                conversation_guard.restore_state(conversation)
                 if was_running:
                     codex_control.start()
         self._run_task("正在切换为纯官方订阅", work, self._mode_switch_done)
