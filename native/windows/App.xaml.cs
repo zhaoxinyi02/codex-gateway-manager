@@ -18,7 +18,15 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        MainWindowInstance = new MainWindow();
-        MainWindowInstance.Activate();
+        try
+        {
+            MainWindowInstance = new MainWindow();
+            MainWindowInstance.Activate();
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "ModelDock-startup-error.txt"), error.ToString());
+            throw;
+        }
     }
 }

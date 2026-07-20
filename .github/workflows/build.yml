@@ -81,6 +81,8 @@ jobs:
           $app = Start-Process -FilePath (Join-Path $install "ModelDock.exe") -PassThru
           Start-Sleep -Seconds 8
           if ($app.HasExited) {
+            $startupLog = Join-Path $env:TEMP "ModelDock-startup-error.txt"
+            if (Test-Path $startupLog) { Write-Host "ModelDock managed startup error:"; Get-Content $startupLog | Write-Host }
             Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -ErrorAction SilentlyContinue |
               Where-Object { $_.Message -match 'ModelDock|Microsoft.UI.Xaml|CoreMessaging|WinUI' } |
               Select-Object -First 8 TimeCreated, ProviderName, Id, LevelDisplayName, Message |

@@ -19,23 +19,26 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
-        InitializeComponent();
         try
         {
-            if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
-                SystemBackdrop = new MicaBackdrop();
+            InitializeComponent();
+            try
+            {
+                if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+                    SystemBackdrop = new MicaBackdrop();
+            }
+            catch { }
+            ConfigureWindow();
+            Activated += async (_, _) =>
+            {
+                if (_snapshot is null) await RefreshAsync();
+            };
         }
-        catch
+        catch (Exception error)
         {
-            // Remote Desktop, Windows Server and disabled-transparency systems
-            // can reject backdrop creation. Native controls still work with
-            // the system's solid fallback background.
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "ModelDock-startup-error.txt"), error.ToString());
+            throw;
         }
-        ConfigureWindow();
-        Activated += async (_, _) =>
-        {
-            if (_snapshot is null) await RefreshAsync();
-        };
     }
 
     private void ConfigureWindow()
