@@ -61,20 +61,23 @@ jobs:
       - name: Build WinUI application and installer
         shell: pwsh
         run: |
-          $version = python -c "import sys; sys.path.insert(0,'src'); from constants import APP_VERSION; print(APP_VERSION)"
+          $version = (python -c "import sys; sys.path.insert(0,'src'); from constants import APP_VERSION; print(APP_VERSION)").Trim()
           .\scripts\build_windows_native.ps1 -VersionTag $version
 
       - name: Smoke test installed WinUI application
         shell: pwsh
         run: |
-          $version = python -c "import sys; sys.path.insert(0,'src'); from constants import APP_VERSION; print(APP_VERSION)"
+          $version = (python -c "import sys; sys.path.insert(0,'src'); from constants import APP_VERSION; print(APP_VERSION)").Trim()
           $setup = Join-Path $PWD "dist\ModelDock_${version}_Windows_x64_Setup.exe"
           $install = Join-Path $env:RUNNER_TEMP "ModelDock-Smoke"
           $process = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$install" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Setup smoke install failed: $($process.ExitCode)" }
           $backend = Join-Path $install "Backend\ModelDockBackend.exe"
-          $json = '{}' | & $backend snapshot | ConvertFrom-Json
-          if (-not $json.ok -or $json.result.version -ne $version) { throw "Backend snapshot smoke test failed." }
+          $backendOutput = '{}' | & $backend snapshot
+          if ($LASTEXITCODE -ne 0) { throw "Backend snapshot process failed: $backendOutput" }
+          $json = $backendOutput | ConvertFrom-Json
+          Write-Host "Backend smoke version: $($json.result.version); expected: $version; ok: $($json.ok)"
+          if ($json.ok -ne $true -or [string]$json.result.version -ne [string]$version) { throw "Backend snapshot smoke test failed." }
           $app = Start-Process -FilePath (Join-Path $install "ModelDock.exe") -PassThru
           Start-Sleep -Seconds 8
           if ($app.HasExited) { throw "WinUI app exited during startup: $($app.ExitCode)" }
